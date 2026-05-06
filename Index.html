@@ -1,0 +1,477 @@
+```react
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getFirestore, 
+  collection, 
+  doc, 
+  addDoc, 
+  onSnapshot, 
+  deleteDoc, 
+  updateDoc
+} from 'firebase/firestore';
+import { 
+  getAuth, 
+  signInAnonymously, 
+  signInWithCustomToken, 
+  onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+  LayoutDashboard, 
+  Users, 
+  LogOut, 
+  Plus, 
+  Trash2, 
+  Car, 
+  DollarSign,
+  UserPlus,
+  ShieldCheck,
+  Calendar,
+  Clock,
+  Sun,
+  Moon,
+  Edit2,
+  X,
+  Check,
+  ArrowDownRight,
+  Star,
+  Loader2,
+  FileText,
+  AlertCircle,
+  Receipt,
+  AlertTriangle,
+  Download,
+  Filter,
+  Banknote
+} from 'lucide-react';
+
+// --- Firebase Configuration ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'century-car-spa-ultra-v5';
+
+// --- Constants ---
+const APP_PASSWORD = "77777";
+const SERVICES = ["Wash", "Polish", "Window Film", "Wrapping", "PPF", "Other"];
+const COMM_TYPES = ["Commission for Polish", "Commission for Window Film", "Commission for Wash", "General Commission"];
+const EXPERTISE = ["Polish", "Window Film", "General"];
+
+// --- Helpers ---
+const toEnglishDigits = (str) => {
+  if (!str) return "";
+  const burmeseDigits = ['၀', '၁', '၂', '၃', '၄', '၅', '၆', '၇', '၈', '၉'];
+  return String(str).replace(/[၀-၉]/g, (d) => burmeseDigits.indexOf(d));
+};
+
+const App = () => {
+  // --- States ---
+  const [user, setUser] = useState(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [darkMode, setDarkMode] = useState(true);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [isDataLoaded, setIsDataLoaded] = useState(false);
+  const [showToast, setShowToast] = useState(null);
+
+  // Data
+  const [sales, setSales] = useState([]);
+  const [staff, setStaff] = useState([]);
+  const [expenses, setExpenses] = useState([]);
+  const [logs, setLogs] = useState([]);
+
+  // UI
+  const [editingItem, setEditingItem] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [reportDate, setReportDate] = useState(new Date().toISOString().substring(0, 7));
+  const [reportType, setReportType] = useState('monthly');
+
+  // Forms
+  const [newSale, setNewSale] = useState({ date: new Date().toISOString().substring(0, 10), carNo: '', service: 'Wash', price: '', staffId: '', commissionType: 'Commission for Wash' });
+  const [newStaff, setNewStaff] = useState({ name: '', baseSalary: '', commissionRate: '', expertise: 'Polish' });
+  const [newExpense, setNewExpense] = useState({ date: new Date().toISOString().substring(0, 10), title: '', amount: '', category: 'Material' });
+  const [newLog, setNewLog] = useState({ date: new Date().toISOString().substring(0, 10), staffId: '', type: 'advance', amount: '', reason: '' });
+
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    script.async = true;
+    document.head.appendChild(script);
+  }, []);
+
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) { console.error(err); }
+    };
+    initAuth();
+    onAuthStateChanged(auth, u => setUser(u));
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const collections = ['sales', 'staff', 'expenses', 'logs'];
+    const unsubs = collections.map(c => 
+      onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', c), (snap) => {
+        const data = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+        if (c === 'sales') setSales(data.sort((a,b) => b.date.localeCompare(a.date)));
+        if (c === 'staff') setStaff(data);
+        if (c === 'expenses') setExpenses(data.sort((a,b) => b.date.localeCompare(a.date)));
+        if (c === 'logs') setLogs(data.sort((a,b) => b.date.localeCompare(a.date)));
+        setIsDataLoaded(true);
+      })
+    );
+    return () => unsubs.forEach(u => u());
+  }, [user]);
+
+  const payrollData = useMemo(() => {
+    const filterY = reportDate.substring(0, 4);
+    const filterM = reportDate;
+    return staff.map(s => {
+      const sSales = sales.filter(x => {
+        const dateOk = reportType === 'monthly' ? x.date.startsWith(filterM) : x.date.startsWith(filterY);
+        const expOk = s.expertise === 'General' || x.commissionType?.toLowerCase().includes(s.expertise.toLowerCase());
+        return x.staffId === s.id && dateOk && expOk;
+      });
+      const sLogs = logs.filter(x => {
+        const dateOk = reportType === 'monthly' ? x.date.startsWith(filterM) : x.date.startsWith(filterY);
+        return x.staffId === s.id && dateOk;
+      });
+      const comm = sSales.reduce((a, c) => a + (Number(c.price || 0) * (Number(s.commissionRate || 0) / 100)), 0);
+      const adv = sLogs.filter(x => x.type === 'advance').reduce((a, c) => a + Number(c.amount || 0), 0);
+      const penalty = (Number(s.baseSalary || 0) / 30) * sLogs.filter(x => x.type === 'absence').length;
+      return { ...s, comm, adv, penalty, net: Number(s.baseSalary || 0) + comm - adv - penalty };
+    });
+  }, [staff, sales, logs, reportDate, reportType]);
+
+  const stats = useMemo(() => {
+    const filterM = reportDate;
+    const filterY = reportDate.substring(0, 4);
+    const filterFn = (x) => reportType === 'monthly' ? x.date.startsWith(filterM) : x.date.startsWith(filterY);
+    const s = sales.filter(filterFn);
+    const e = expenses.filter(filterFn);
+    const rev = s.reduce((a, c) => a + Number(c.price || 0), 0);
+    const exp = e.reduce((a, c) => a + Number(c.amount || 0), 0);
+    const payroll = payrollData.reduce((a, c) => a + c.net, 0);
+    return { rev, exp, payroll, profit: rev - exp - payroll };
+  }, [sales, expenses, payrollData, reportDate, reportType]);
+
+  const dbOp = async (type, col, data, id = null) => {
+    if (!user) return;
+    try {
+      if (type === 'delete') {
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', col, id));
+        setDeleteTarget(null);
+        return;
+      }
+      const payload = { ...data };
+      ['price', 'amount', 'baseSalary', 'commissionRate'].forEach(k => {
+        if (payload[k]) payload[k] = Number(toEnglishDigits(String(payload[k])));
+      });
+      if (type === 'add') await addDoc(collection(db, 'artifacts', appId, 'public', 'data', col), { ...payload, createdAt: Date.now() });
+      if (type === 'update') await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', col, id), payload);
+      setEditingItem(null);
+    } catch (err) { console.error(err); }
+  };
+
+  const exportExcel = () => {
+    if (!window.XLSX) return;
+    const wb = window.XLSX.utils.book_new();
+    const sMap = sales.filter(x => x.date.startsWith(reportDate)).map(x => ({'နေ့စွဲ': x.date, 'ကားနံပါတ်': x.carNo, 'ဝန်ဆောင်မှု': x.service, 'စျေးနှုန်း': x.price}));
+    const pMap = payrollData.map(x => ({'အမည်': x.name, 'လစာ': x.baseSalary, 'ကော်မရှင်': x.comm, 'Net': x.net}));
+    window.XLSX.utils.book_append_sheet(wb, window.XLSX.utils.json_to_sheet(sMap), "Sales");
+    window.XLSX.utils.book_append_sheet(wb, window.XLSX.utils.json_to_sheet(pMap), "Payroll");
+    window.XLSX.writeFile(wb, `Century_Report_${reportDate}.xlsx`);
+  };
+
+  if (!isAuthenticated) {
+    return (
+      <div className={`min-h-screen w-full flex items-center justify-center p-6 sm:p-12 ${darkMode ? 'bg-slate-950' : 'bg-slate-50'}`}>
+        <div className={`w-full max-w-sm p-8 sm:p-12 rounded-[3.5rem] shadow-2xl border text-center relative overflow-hidden transition-all ${darkMode ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'}`}>
+          <div className="bg-slate-950 p-6 rounded-[2.5rem] text-amber-500 w-fit mx-auto mb-10 shadow-2xl border border-amber-500/10">
+            <Car size={48} className="animate-pulse" />
+          </div>
+          
+          <div className="mb-12">
+            <h1 className="text-3xl sm:text-4xl font-black text-amber-500 uppercase italic tracking-tighter leading-none mb-2">CENTURY CAR</h1>
+            <h1 className="text-3xl sm:text-4xl font-black text-amber-500 uppercase italic tracking-tighter leading-none">SPA</h1>
+          </div>
+
+          <form onSubmit={(e) => { e.preventDefault(); if(passwordInput === APP_PASSWORD) setIsAuthenticated(true); else setPasswordInput(''); }} className="space-y-8">
+            <div className="relative">
+              <input 
+                type="password" 
+                placeholder="Passcode" 
+                className={`w-full p-6 rounded-3xl border-none focus:ring-4 focus:ring-amber-500/20 text-center text-2xl font-bold tracking-[0.2em] outline-none shadow-inner placeholder:opacity-30 placeholder:tracking-normal ${darkMode ? 'bg-slate-800 text-white' : 'bg-slate-100'}`} 
+                value={passwordInput} 
+                onChange={e=>setPasswordInput(e.target.value)} 
+                autoFocus 
+              />
+            </div>
+            <button type="submit" className="w-full bg-amber-500 text-slate-950 p-6 rounded-[2rem] font-black uppercase text-xs tracking-[0.2em] shadow-xl hover:bg-amber-400 active:scale-95 transition-all">
+              LOGIN
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isDataLoaded) return <div className="min-h-screen flex items-center justify-center bg-slate-950"><Loader2 className="animate-spin text-amber-500" size={56}/></div>;
+
+  const menuItems = [
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'sales', label: 'အရောင်း', icon: Plus },
+    { id: 'staff', label: 'ဝန်ထမ်းစီမံ', icon: Users },
+    { id: 'logs', label: 'ကြိုထုတ်/ပျက်ရက်', icon: Clock },
+    { id: 'expenses', label: 'အထွေထွေအထွက်', icon: ArrowDownRight },
+    { id: 'reports', label: 'လချုပ်/နှစ်ချုပ်', icon: Calendar },
+  ];
+
+  return (
+    <div className={`h-screen flex flex-col lg:flex-row overflow-hidden transition-all duration-500 ${darkMode ? 'bg-slate-950 text-slate-200' : 'bg-slate-50 text-slate-900'}`}>
+      
+      {/* PC Sidebar */}
+      <aside className={`hidden lg:flex w-72 flex-col h-screen p-8 shadow-2xl shrink-0 border-r ${darkMode ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-200'}`}>
+        <div className="flex items-center gap-4 mb-16 px-2">
+            <div className="bg-amber-500 p-2.5 rounded-xl text-slate-900 shadow-xl"><Car size={24}/></div>
+            <h1 className="text-2xl font-black text-amber-500 uppercase italic">Century</h1>
+        </div>
+        <nav className="flex-1 space-y-2 overflow-y-auto no-scrollbar">
+            {menuItems.map(item => (
+                <button key={item.id} onClick={() => setActiveTab(item.id)} className={`w-full flex items-center gap-5 px-6 py-5 rounded-2xl font-black text-[10px] uppercase tracking-widest transition-all ${activeTab === item.id ? 'bg-amber-500 text-slate-950 shadow-xl scale-105' : 'text-slate-500 hover:text-amber-500 hover:bg-white/5'}`}>
+                    <item.icon size={20}/> {item.label}
+                </button>
+            ))}
+        </nav>
+        <div className="pt-8 border-t border-white/5 mt-8 space-y-3">
+            <button onClick={() => setDarkMode(!darkMode)} className="w-full flex items-center gap-5 px-6 py-5 rounded-2xl font-black text-[10px] uppercase text-slate-500 hover:bg-white/5">{darkMode ? <Sun size={20}/> : <Moon size={20}/>} Mode</button>
+            <button onClick={() => setIsAuthenticated(false)} className="w-full flex items-center gap-5 px-6 py-5 rounded-2xl font-black text-[10px] uppercase text-red-500/60 hover:bg-white/5"><LogOut size={20}/> Exit</button>
+        </div>
+      </aside>
+
+      {/* Mobile Header */}
+      <header className={`lg:hidden shrink-0 p-5 flex justify-between items-center border-b z-50 backdrop-blur-xl ${darkMode ? 'bg-slate-900/80 border-white/5' : 'bg-white/80 border-slate-200'}`}>
+          <div className="flex items-center gap-3"><div className="bg-amber-500 p-2 rounded-lg text-slate-950"><Car size={18}/></div><h1 className="text-lg font-black text-amber-500 uppercase italic tracking-tighter">Century Car Spa</h1></div>
+          <div className="flex gap-2">
+            <button onClick={() => setDarkMode(!darkMode)} className="p-3 text-slate-400 bg-white/5 rounded-xl">{darkMode ? <Sun size={18}/> : <Moon size={18}/>}</button>
+            <button onClick={() => setIsAuthenticated(false)} className="p-3 text-slate-400 bg-white/5 rounded-xl"><LogOut size={18}/></button>
+          </div>
+      </header>
+
+      {/* Main Scrollable View */}
+      <main className="flex-1 h-full overflow-y-auto no-scrollbar p-6 md:p-12 lg:p-16 pb-44 lg:pb-16 max-w-7xl mx-auto w-full relative">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-8 mb-16 animate-in slide-in-from-bottom-2">
+          <div><p className="text-[10px] font-black text-amber-600 uppercase tracking-[0.4em] mb-2 leading-none">Operation Center</p><h1 className={`text-4xl sm:text-6xl font-black uppercase italic tracking-tighter leading-none ${darkMode ? 'text-white' : 'text-slate-900'}`}>{activeTab}</h1></div>
+          {activeTab !== 'reports' && (
+            <div className={`px-10 py-6 rounded-[2.5rem] shadow-2xl border ${darkMode ? 'bg-slate-900 border-white/5' : 'bg-white border-amber-100'}`}><p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Today's Revenue</p><p className="text-3xl font-black text-green-500">{(sales.filter(s=>s.date === new Date().toISOString().substring(0,10)).reduce((a,c)=>a+Number(c.price||0), 0)).toLocaleString()} Ks</p></div>
+          )}
+        </div>
+
+        {/* Dash/Tab Logic */}
+        <div className="animate-in fade-in duration-700">
+          {activeTab === 'dashboard' && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+              <div onClick={() => setActiveTab('reports')} className={`p-10 rounded-[4rem] border shadow-2xl flex flex-col justify-between group hover:border-amber-500/30 transition-all cursor-pointer ${darkMode ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-100'}`}><div className="bg-green-500/10 text-green-500 p-6 rounded-[2rem] w-fit mb-12 shadow-inner group-hover:scale-110 transition-transform"><DollarSign size={32}/></div><div><h3 className="text-slate-500 text-[10px] font-black uppercase tracking-widest mb-2">Total Gross</h3><p className="text-4xl sm:text-5xl font-black tracking-tighter">{sales.reduce((a,c)=>a+Number(c.price||0),0).toLocaleString()} Ks</p></div></div>
+              <div onClick={() => setActiveTab('expenses')} className={`p-10 rounded-[4rem] border shadow-2xl flex flex-col justify-between group hover:border-red-500/30 transition-all cursor-pointer ${darkMode ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-100'}`}><div className="bg-red-500/10 text-red-500 p-6 rounded-[2rem] w-fit mb-12 shadow-inner group-hover:scale-110 transition-transform"><ArrowDownRight size={32}/></div><div><h3 className="text-slate-500 text-[10px] font-black uppercase tracking-widest mb-2">Total Expenses</h3><p className="text-4xl sm:text-5xl font-black tracking-tighter">{expenses.reduce((a,c)=>a+Number(c.amount||0),0).toLocaleString()} Ks</p></div></div>
+              <div className={`p-10 rounded-[4rem] text-amber-500 shadow-2xl border flex flex-col justify-between ${darkMode ? 'bg-slate-800 border-amber-500/20' : 'bg-slate-900 border-amber-500/20'}`}><div className="bg-white/10 p-6 rounded-[2rem] w-fit mb-12 shadow-inner"><Star size={32}/></div><div><h3 className="text-amber-500/50 text-[10px] font-black uppercase tracking-widest mb-2">Professional Force</h3><p className="text-4xl sm:text-5xl font-black tracking-tighter">{staff.length} Members</p></div></div>
+            </div>
+          )}
+
+          {activeTab === 'sales' && (
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-12 pb-20">
+              <div className={`p-10 rounded-[3.5rem] border shadow-3xl h-fit xl:sticky xl:top-0 ${darkMode ? 'bg-slate-900 border-white/5' : 'bg-white border-amber-100'}`}>
+                <h2 className="text-2xl font-black mb-8 flex items-center gap-4 text-amber-500 uppercase italic"><Plus size={24}/> New Log</h2>
+                <form onSubmit={(e)=>{e.preventDefault(); dbOp('add','sales',newSale); setNewSale({...newSale, carNo:'', price:''})}} className="space-y-6">
+                  <input type="date" className="w-full p-5 rounded-2xl border-none font-bold bg-black/20" value={newSale.date} onChange={e=>setNewSale({...newSale, date:e.target.value})} />
+                  <input type="text" placeholder="Car Plate" className="w-full p-5 rounded-2xl border-none font-black uppercase text-2xl bg-black/20 shadow-inner" value={newSale.carNo} onChange={e=>setNewSale({...newSale, carNo:e.target.value.toUpperCase()})} />
+                  <div className="grid grid-cols-2 gap-4">
+                    <select className="p-5 rounded-2xl border-none font-bold bg-black/20" value={newSale.service} onChange={e=>setNewSale({...newSale, service:e.target.value})}>{SERVICES.map(x=><option key={x} value={x}>{x}</option>)}</select>
+                    <select className="p-5 rounded-2xl border-none font-bold bg-black/20 text-indigo-400" value={newSale.commissionType} onChange={e=>setNewSale({...newSale, commissionType:e.target.value})}>{COMM_TYPES.map(x=><option key={x} value={x}>{x}</option>)}</select>
+                  </div>
+                  <input type="text" placeholder="Amount" className="w-full p-6 rounded-[2rem] border-none font-black text-green-500 text-4xl text-center bg-black/20 shadow-inner" value={newSale.price} onChange={e=>setNewSale({...newSale, price:e.target.value})} />
+                  <select className="w-full p-5 rounded-2xl border-none font-bold bg-black/20" value={newSale.staffId} onChange={e=>setNewSale({...newSale, staffId:e.target.value})}><option value="">Choose Pro</option>{staff.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select>
+                  <button type="submit" className="w-full bg-amber-500 text-slate-950 p-7 rounded-[2rem] font-black uppercase text-[10px] tracking-widest active:scale-95 shadow-xl">Submit Record</button>
+                </form>
+              </div>
+              <div className="xl:col-span-2 space-y-4">
+                {sales.slice(0, 20).map(s => (
+                  <div key={s.id} className={`p-8 rounded-[3rem] border flex flex-col md:flex-row justify-between items-center gap-8 ${darkMode ? 'bg-slate-900 border-white/5' : 'bg-white border-amber-50'}`}>
+                    <div className="flex gap-8 items-center"><div className="bg-slate-950 p-5 rounded-3xl text-amber-500 font-black text-[10px] text-center w-20 shrink-0 border border-amber-500/10"><span className="text-xl font-black">{s.date.split('-')[2]}</span><br/>{new Date(s.date).toLocaleString('default',{month:'short'})}</div><div><h4 className="font-black text-2xl uppercase tracking-tighter leading-none mb-2">{s.carNo}</h4><p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{s.service} • {staff.find(st=>st.id===s.staffId)?.name || 'Guest'}</p></div></div>
+                    <div className="flex items-center gap-8"><div className="text-right"><p className="text-xl font-black text-green-500">{Number(s.price).toLocaleString()} Ks</p><span className="text-[9px] font-black text-indigo-400 uppercase italic opacity-60">{s.commissionType}</span></div><button onClick={()=>setDeleteTarget({id:s.id, col:'sales', label:s.carNo})} className="p-4 bg-white/5 text-slate-500 hover:text-red-500 rounded-2xl"><Trash2 size={18}/></button></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'staff' && (
+            <div className="space-y-12 pb-20">
+              <div className={`p-10 rounded-[4rem] border shadow-2xl ${darkMode ? 'bg-slate-900 border-white/5' : 'bg-white border-amber-50'}`}>
+                <h2 className="text-2xl font-black mb-10 flex items-center gap-4 text-amber-500 uppercase italic leading-none"><UserPlus size={32}/> Onboard Force</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  <input type="text" placeholder="Name" className="p-6 rounded-3xl border-none font-bold bg-black/20 shadow-inner" value={newStaff.name} onChange={e=>setNewStaff({...newStaff, name: e.target.value})} />
+                  <input type="text" placeholder="Wage" className="p-6 rounded-3xl border-none font-bold bg-black/20 shadow-inner" value={newStaff.baseSalary} onChange={e=>setNewStaff({...newStaff, baseSalary: e.target.value})} />
+                  <input type="text" placeholder="Comm %" className="p-6 rounded-3xl border-none font-bold bg-black/20 shadow-inner" value={newStaff.commissionRate} onChange={e=>setNewStaff({...newStaff, commissionRate: e.target.value})} />
+                  <select className="p-6 rounded-3xl border-none font-black text-indigo-400 bg-black/20 shadow-inner" value={newStaff.expertise} onChange={e=>setNewStaff({...newStaff, expertise: e.target.value})}>{EXPERTISE.map(x=><option key={x} value={x}>{x} Pro</option>)}</select>
+                </div>
+                <button onClick={()=>dbOp('add','staff',newStaff).then(()=>setNewStaff({name:'', baseSalary:'', commissionRate:'', expertise:'Polish'}))} className="w-full bg-slate-950 text-amber-500 p-8 rounded-[2.5rem] uppercase font-black text-[10px] tracking-widest mt-10 shadow-3xl border border-amber-500/20 active:scale-95 transition-all">Enroll Professional</button>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-10">
+                {payrollData.map(s => (
+                  <div key={s.id} className={`p-10 rounded-[4rem] border shadow-2xl relative transition-all hover:-translate-y-2 ${darkMode ? 'bg-slate-900 border-white/5' : 'bg-white border-amber-100'}`}>
+                    <div className="absolute top-8 right-8 flex gap-2"><button onClick={()=>setEditingItem({type:'staff', data:s})} className="p-3 bg-white/5 text-slate-500 hover:text-amber-500 rounded-2xl"><Edit2 size={16}/></button><button onClick={()=>setDeleteTarget({id:s.id, col:'staff', label:s.name})} className="p-3 bg-white/5 text-slate-500 hover:text-red-500 rounded-2xl"><Trash2 size={16}/></button></div>
+                    <div className="flex items-center gap-6 mb-12"><div className="bg-slate-950 p-6 rounded-[2.2rem] text-amber-500 shadow-xl border border-amber-500/10">{s.expertise === 'Polish' ? <Star size={32}/> : s.expertise === 'Window Film' ? <ShieldCheck size={32}/> : <Users size={32}/>}</div><div><h3 className="text-2xl font-black mb-1 tracking-tighter truncate max-w-[140px] leading-none">{s.name}</h3><p className="text-[10px] font-black text-amber-600 uppercase tracking-widest">{s.expertise} Elite</p></div></div>
+                    <div className="space-y-4 text-sm font-bold opacity-60">
+                      <div className="flex justify-between"><span>Wage</span><span>{Number(s.baseSalary).toLocaleString()} Ks</span></div>
+                      <div className="flex justify-between text-green-500"><span>Yield</span><span>+{s.comm.toLocaleString()} Ks</span></div>
+                      <div className="flex justify-between text-orange-500"><span>Advances</span><span>-{s.adv.toLocaleString()} Ks</span></div>
+                      <div className="h-px bg-white/10 my-6"></div>
+                      <div className="flex justify-between items-end"><p className="text-[9px] font-black uppercase text-slate-500 tracking-widest leading-none">Net</p><span className="text-3xl font-black tracking-tighter text-amber-500 leading-none">{s.net.toLocaleString(undefined,{maximumFractionDigits:0})} Ks</span></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ... Remaining Tabs (Logs, Expenses, Reports) using similar padding/scrolling patterns ... */}
+          {activeTab === 'logs' && (
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-12 pb-20">
+               <div className={`p-10 rounded-[3.5rem] border shadow-3xl h-fit ${darkMode ? 'bg-slate-900 border-white/5' : 'bg-white border-amber-100'}`}>
+                <h2 className="text-2xl font-black mb-8 flex items-center gap-4 text-amber-500 uppercase italic"><Clock size={24}/> Action Record</h2>
+                <form onSubmit={(e)=>{e.preventDefault(); dbOp('add','logs',newLog); setNewLog({...newLog, amount:'', reason:''})}} className="space-y-6">
+                  <select className="w-full p-5 rounded-2xl border-none font-bold bg-black/20" value={newLog.staffId} onChange={e=>setNewLog({...newLog, staffId:e.target.value})}><option value="">Choose Staff</option>{staff.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select>
+                  <div className="grid grid-cols-2 gap-4">
+                    <select className="p-5 rounded-2xl border-none font-bold bg-black/20" value={newLog.type} onChange={e=>setNewLog({...newLog, type:e.target.value})}><option value="advance">Advance</option><option value="absence">Absence</option></select>
+                    <input type="date" className="p-5 rounded-2xl border-none font-bold bg-black/20" value={newLog.date} onChange={e=>setNewLog({...newLog, date:e.target.value})} />
+                  </div>
+                  {newLog.type === 'advance' && <input type="text" placeholder="Amount (Ks)" className="w-full p-6 rounded-[2rem] border-none font-black text-orange-500 text-3xl text-center bg-black/20 shadow-inner" value={newLog.amount} onChange={e=>setNewLog({...newLog, amount:e.target.value})} />}
+                  <input type="text" placeholder="Notes" className="w-full p-5 rounded-2xl border-none font-bold bg-black/20 shadow-inner" value={newLog.reason} onChange={e=>setNewLog({...newLog, reason:e.target.value})} />
+                  <button type="submit" className="w-full bg-amber-500 text-slate-950 p-7 rounded-[2rem] font-black uppercase text-[10px] tracking-widest shadow-xl active:scale-95 transition-all">Save Log</button>
+                </form>
+              </div>
+              <div className="xl:col-span-2 space-y-4">
+                {logs.slice(0, 15).map(l => (
+                  <div key={l.id} className={`p-7 rounded-[2.5rem] border flex justify-between items-center ${darkMode ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-100'}`}>
+                    <div className="flex gap-6 items-center"><div className={`p-5 rounded-3xl ${l.type === 'advance' ? 'bg-orange-500/10 text-orange-500' : 'bg-red-500/10 text-red-500'}`}>{l.type === 'advance' ? <Banknote size={24}/> : <AlertCircle size={24}/>}</div><div><p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">{l.date} • {staff.find(st=>st.id===l.staffId)?.name}</p><h4 className="font-bold text-lg uppercase italic leading-none">{l.type === 'advance' ? `${Number(l.amount).toLocaleString()} Ks Advance` : 'Absence Logged'}</h4></div></div>
+                    <button onClick={()=>setDeleteTarget({id:l.id, col:'logs', label:'Log Entry'})} className="p-4 bg-white/5 text-slate-500 hover:text-red-500 rounded-2xl"><Trash2 size={18}/></button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'expenses' && (
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-12 pb-20">
+               <div className={`p-10 rounded-[3.5rem] border shadow-3xl h-fit ${darkMode ? 'bg-slate-900 border-white/5' : 'bg-white border-amber-100'}`}>
+                <h2 className="text-2xl font-black mb-8 flex items-center gap-4 text-red-500 uppercase italic leading-none"><Receipt size={24}/> New Expense</h2>
+                <form onSubmit={(e)=>{e.preventDefault(); dbOp('add','expenses',newExpense); setNewExpense({...newExpense, title:'', amount:''})}} className="space-y-6">
+                  <input type="text" placeholder="Title" className="w-full p-5 rounded-2xl border-none font-bold bg-black/20 shadow-inner" value={newExpense.title} onChange={e=>setNewExpense({...newExpense, title:e.target.value})} />
+                  <div className="grid grid-cols-2 gap-4">
+                    <select className="p-5 rounded-2xl border-none font-bold bg-black/20 shadow-inner" value={newExpense.category} onChange={e=>setNewExpense({...newExpense, category:e.target.value})}><option value="Material">Material</option><option value="Utility">Utility</option><option value="Rent">Rent</option><option value="Other">Other</option></select>
+                    <input type="date" className="p-5 rounded-2xl border-none font-bold bg-black/20 shadow-inner" value={newExpense.date} onChange={e=>setNewExpense({...newExpense, date:e.target.value})} />
+                  </div>
+                  <input type="text" placeholder="Amount (Ks)" className="w-full p-6 rounded-[2rem] border-none font-black text-red-500 text-4xl text-center bg-black/20 shadow-inner" value={newExpense.amount} onChange={e=>setNewExpense({...newExpense, amount:e.target.value})} />
+                  <button type="submit" className="w-full bg-red-500 text-white p-7 rounded-[2rem] font-black uppercase text-[10px] tracking-widest shadow-xl active:scale-95 transition-all">Deduct Overheads</button>
+                </form>
+              </div>
+              <div className="xl:col-span-2 space-y-4">
+                {expenses.slice(0, 15).map(ex => (
+                  <div key={ex.id} className={`p-8 rounded-[3rem] border flex justify-between items-center group transition-all hover:bg-red-500/5 ${darkMode ? 'bg-slate-900 border-white/5' : 'bg-white border-slate-100'}`}>
+                    <div className="flex gap-8 items-center"><div className="bg-red-500/10 text-red-500 p-6 rounded-[2.2rem] text-center w-24 shrink-0 shadow-inner"><span className="text-2xl font-black leading-none">{ex.date.split('-')[2]}</span><br/><span className="text-[10px] font-black uppercase opacity-60">{new Date(ex.date).toLocaleString('default',{month:'short'})}</span></div><div><h4 className="font-black text-xl uppercase tracking-tighter italic mb-1 leading-none">{ex.title}</h4><p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{ex.category}</p></div></div>
+                    <div className="flex items-center gap-10"><p className="text-3xl font-black text-red-500 tracking-tighter">-{Number(ex.amount).toLocaleString()} Ks</p><button onClick={()=>setDeleteTarget({id:ex.id, col:'expenses', label:ex.title})} className="p-4 bg-white/5 text-slate-500 hover:text-red-500 rounded-2xl"><Trash2 size={18}/></button></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'reports' && (
+            <div className="space-y-12 pb-24">
+              <div className={`p-10 rounded-[4rem] border shadow-2xl flex flex-col xl:flex-row gap-10 items-center justify-between ${darkMode ? 'bg-slate-900 border-white/5' : 'bg-white border-amber-50'}`}>
+                <div className="flex flex-wrap gap-6 items-center">
+                  <input type={reportType === 'monthly' ? 'month' : 'number'} className="p-5 rounded-2xl border-none font-black bg-black/20" value={reportType === 'monthly' ? reportDate : reportDate.substring(0, 4)} onChange={e => setReportDate(e.target.value)} />
+                  <select className="p-5 rounded-2xl border-none font-black text-indigo-400 bg-black/20" value={reportType} onChange={e => setReportType(e.target.value)}><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select>
+                </div>
+                <div className="flex gap-4"><button onClick={() => toast("Exporting...")} className="bg-green-500 text-slate-950 px-8 py-5 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl flex items-center gap-3"><Download size={20}/> Excel</button><button onClick={() => window.print()} className="bg-amber-500 text-slate-950 px-8 py-5 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl flex items-center gap-3"><FileText size={20}/> PDF</button></div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
+                <div className="p-10 rounded-[3rem] bg-green-500/5 border border-green-500/10 shadow-inner"><p className="text-[10px] font-black text-green-500/60 uppercase tracking-widest mb-2">Cycle Inflow</p><p className="text-3xl font-black text-green-500 tracking-tighter">{stats.rev.toLocaleString()} Ks</p></div>
+                <div className="p-10 rounded-[3rem] bg-red-500/5 border border-red-500/10 shadow-inner"><p className="text-[10px] font-black text-red-500/60 uppercase tracking-widest mb-2">Expenses</p><p className="text-3xl font-black text-red-500 tracking-tighter">{stats.exp.toLocaleString()} Ks</p></div>
+                <div className="p-10 rounded-[3rem] bg-indigo-500/5 border border-indigo-500/10 shadow-inner"><p className="text-[10px] font-black text-indigo-500/60 uppercase tracking-widest mb-2">Payroll</p><p className="text-3xl font-black text-indigo-500 tracking-tighter">{stats.payroll.toLocaleString(undefined,{maximumFractionDigits:0})} Ks</p></div>
+                <div className="p-10 rounded-[3rem] bg-amber-500/10 border border-amber-500/20 shadow-inner"><p className="text-[10px] font-black text-amber-500 uppercase tracking-widest mb-2">Net Synergy</p><p className="text-3xl font-black text-amber-500 tracking-tighter">{stats.profit.toLocaleString(undefined,{maximumFractionDigits:0})} Ks</p></div>
+              </div>
+              <div className={`p-10 rounded-[4rem] border shadow-2xl overflow-hidden ${darkMode ? 'bg-slate-900 border-white/5' : 'bg-white border-amber-100'}`}>
+                 <div className="overflow-x-auto no-scrollbar"><table className="w-full text-left"><thead><tr className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] border-b border-white/5"><th className="py-6 px-4">Professional</th><th className="py-6 px-4">Yield</th><th className="py-6 px-4">Cuts</th><th className="py-6 px-4 text-right">Net</th></tr></thead><tbody className="divide-y divide-white/5">{payrollData.map(p=>(<tr key={p.id} className="group hover:bg-white/5 transition-colors"><td className="py-6 px-4 font-black uppercase italic text-lg">{p.name}</td><td className="py-6 px-4 font-bold text-green-500">+{p.comm.toLocaleString(undefined, {maximumFractionDigits:0})}</td><td className="py-6 px-4 font-bold text-red-500">-{ (p.adv + p.penalty).toLocaleString(undefined, {maximumFractionDigits:0}) }</td><td className="py-6 px-4 text-right font-black text-2xl tracking-tighter text-amber-500">{p.net.toLocaleString(undefined, {maximumFractionDigits:0})} Ks</td></tr>))}</tbody></table></div>
+              </div>
+            </div>
+          )}
+        </div>
+      </main>
+
+      {/* Confirmation Modal */}
+      {deleteTarget && (
+        <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-xl z-[300] flex items-center justify-center p-6">
+          <div className={`w-full max-w-md rounded-[4rem] p-12 text-center border ${darkMode ? 'bg-slate-900 border-red-500/20' : 'bg-white border-red-500/10'} shadow-2xl animate-in slide-in-from-bottom-4`}>
+            <div className="bg-red-500/10 text-red-500 p-7 rounded-[2.5rem] w-fit mx-auto mb-8 shadow-inner"><AlertTriangle size={48}/></div>
+            <h2 className="text-3xl font-black text-red-500 uppercase italic mb-4 leading-none tracking-tighter">Confirm Purge</h2>
+            <p className="text-slate-500 font-bold text-sm mb-12 italic">Delete <span className="text-white px-2 rounded-lg bg-red-500/20">{deleteTarget.label}</span> permanently?</p>
+            <div className="flex flex-col gap-4">
+              <button onClick={()=>dbOp('delete', deleteTarget.col, null, deleteTarget.id)} className="w-full bg-red-500 text-white p-7 rounded-[2.2rem] font-black uppercase text-[10px] tracking-widest active:scale-95 transition-all">Execute Purge</button>
+              <button onClick={()=>setDeleteTarget(null)} className="w-full p-7 rounded-[2.2rem] font-black uppercase text-[10px] tracking-widest text-slate-500 bg-white/5 transition-all">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Modal */}
+      {editingItem && (
+        <div className="fixed inset-0 bg-slate-950/95 backdrop-blur-xl z-[200] flex items-center justify-center p-6 animate-in fade-in duration-300">
+          <div className={`w-full max-w-xl rounded-[4rem] p-12 shadow-2xl border ${darkMode ? 'bg-slate-900 border-white/10' : 'bg-white border-amber-500/20'}`}>
+            <div className="flex justify-between items-center mb-12"><h2 className="text-3xl font-black text-amber-500 uppercase italic leading-none">Modify Profile</h2><button onClick={()=>setEditingItem(null)} className="text-slate-500 hover:text-red-500 p-4 bg-white/5 rounded-3xl"><X size={32}/></button></div>
+            {editingItem.type === 'staff' && (
+              <form onSubmit={(e)=>{e.preventDefault(); dbOp('update', 'staff', editingItem.data, editingItem.data.id)}} className="space-y-8">
+                <input type="text" className="w-full p-6 rounded-3xl border-none font-bold bg-black/20 shadow-inner" value={editingItem.data.name} onChange={e=>setEditingItem({...editingItem, data: {...editingItem.data, name: e.target.value}})} />
+                <div className="grid grid-cols-2 gap-8">
+                  <input type="text" className="w-full p-6 rounded-3xl border-none font-bold bg-black/20 shadow-inner" value={editingItem.data.baseSalary} onChange={e=>setEditingItem({...editingItem, data: {...editingItem.data, baseSalary: e.target.value}})} />
+                  <input type="text" className="w-full p-6 rounded-3xl border-none font-bold bg-black/20 shadow-inner" value={editingItem.data.commissionRate} onChange={e=>setEditingItem({...editingItem, data: {...editingItem.data, commissionRate: e.target.value}})} />
+                </div>
+                <button type="submit" className="w-full p-8 rounded-[2.2rem] bg-amber-500 text-slate-950 font-black uppercase tracking-widest text-[11px] shadow-3xl active:scale-95 transition-all">Synchronize</button>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Mobile Nav */}
+      <nav className={`lg:hidden fixed bottom-8 left-8 right-8 border p-3 flex justify-between items-center z-[100] shadow-[0_30px_100px_rgba(0,0,0,0.8)] rounded-[3rem] backdrop-blur-3xl ${darkMode ? 'bg-slate-900/95 border-white/5' : 'bg-slate-950/95 border-amber-500/20'}`}>
+        {menuItems.map(item => (
+          <button key={item.id} onClick={()=>setActiveTab(item.id)} className={`p-6 rounded-full transition-all duration-500 ${activeTab === item.id ? 'bg-amber-400 text-slate-950 shadow-[0_0_40px_rgba(251,191,36,0.5)] -translate-y-6 scale-125' : 'text-slate-500'}`}><item.icon size={26}/></button>
+        ))}
+      </nav>
+
+      <style dangerouslySetInnerHTML={{ __html: `
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@200..800&display=swap');
+        body { font-family: 'Plus Jakarta Sans', sans-serif; margin: 0; overflow: hidden; height: 100vh; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-in { animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        input, select { -webkit-appearance: none; outline: none; transition: all 0.3s; }
+        .shadow-inner { box-shadow: inset 0 2px 10px 0 rgba(0, 0, 0, 0.3); }
+        @media print { nav, aside, header, .fixed, button { display: none !important; } main { p: 0 !important; max-width: 100% !important; overflow: visible !important; height: auto !important; } .rounded-[4rem], .rounded-[3rem] { border-radius: 0 !important; border: none !important; } }
+      `}} />
+    </div>
+  );
+};
+
+export default App;
+
+```
